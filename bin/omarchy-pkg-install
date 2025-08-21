@@ -1,6 +1,18 @@
 #!/bin/bash
 
+generate_pkg_lines() {
+  {
+    pacman -Sl --color=always
+    yay -Sla --color=always
+  } | awk '{printf "%s\t%s\n", $2, $0}'
+}
+
 fzf_args=(
+  --ansi
+  --delimiter=$'\t'
+  --with-nth=2..
+  --no-sort
+  --exact
   --multi
   --preview 'echo "alt-p: toggle description, alt-j/k: scroll, F11: maximize"; echo; yay -Sii {1}'
   --preview-window 'down:65%:wrap'
@@ -9,10 +21,10 @@ fzf_args=(
   --bind 'alt-k:preview-up,alt-j:preview-down'
 )
 
-pkg_name=$(yay -Slq | fzf "${fzf_args[@]}")
+readarray -t pkg_array < <(generate_pkg_lines | fzf "${fzf_args[@]}" | cut -f1)
 
-if [[ -n "$pkg_name" ]]; then
-  yay -Sy --noconfirm "$pkg_name"
+if [[ ${#pkg_array[@]} -gt 0 ]]; then
+  yay -Sy --noconfirm "${pkg_array[@]}"
   sudo updatedb
   omarchy-show-done
 fi
