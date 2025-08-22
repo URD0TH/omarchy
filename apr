@@ -1,0 +1,73 @@
+#!/bin/bash
+
+GITHUB_USER="URD0TH"
+FORK_REPO="omarchy"
+UPSTREAM_REPO="basecamp/omarchy"
+MAIN_BRANCH="master"  # Cambia a 'main' si usas esa como rama principal
+
+function check_remote_upstream() {
+  if git remote | grep -q '^upstream$'; then
+    echo "Remoto 'upstream' ya está configurado."
+  else
+    echo "Agregando remoto 'upstream'..."
+    git remote add upstream https://github.com/${UPSTREAM_REPO}.git
+  fi
+}
+
+function fetch_and_checkout_pr() {
+  local pr_num=$1
+  git fetch upstream pull/${pr_num}/head:pr-${pr_num}
+  git checkout pr-${pr_num}
+}
+
+function create_empty_commit() {
+  local pr_num=$1
+  git commit --allow-empty -m "pr desde el repo origin PR #${pr_num} https://github.com/${UPSTREAM_REPO}/pull/${pr_num}"
+}
+
+function push_branch() {
+  local branch=$1
+  git push origin ${branch}
+}
+
+function create_github_pr() {
+  local pr_num=$1
+  local branch="pr-${pr_num}"
+  local title="Aplicar PR #${pr_num} desde repo origin"
+  local body="Este PR aplica los cambios del PR #${pr_num} del repo original:\nhttps://github.com/${UPSTREAM_REPO}/pull/${pr_num}"
+
+  echo "Creando Pull Request con GitHub CLI..."
+
+  pr_url=$(gh pr create --base ${MAIN_BRANCH} --head ${GITHUB_USER}:${branch} --title "${title}" --body "${body}" --json url --jq .url)
+
+  if [ -n "$pr_url" ]; then
+    echo "PR creado correctamente: $pr_url"
+  else
+    echo "No se pudo obtener la URL del PR."
+  fi
+}
+
+# --- Script principal ---
+
+# Verificar que gh esté instalado
+if ! command -v gh &> /dev/null; then
+  echo "Error: gh CLI no está instalado. Instálalo desde https://cli.github.com/"
+  exit 1
+fi
+
+check_remote_upstream
+
+read -p "Ingresa el número del PR que quieres traer: " pr_num
+
+fetch_and_checkout_pr "$pr_num"
+create_empty_commit "$pr_num"
+push_branch "pr-${pr_num}"
+
+create_github_pr "$pr_num"
+
+# Volver a la rama principal y eliminar la rama local
+git checkout ${MAIN_BRANCH}
+git branch -D pr-${pr_num}
+
+echo "Rama local pr-${pr_num} eliminada. Estás en la rama ${MAIN_BRANCH}."
+# --- Fin del script ---
