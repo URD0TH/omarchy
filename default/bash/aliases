@@ -1,10 +1,121 @@
-# File system
+# === File System ===
 alias ls='eza -lh --group-directories-first --icons=auto'
 alias lsa='ls -a'
+alias ll='ls -la'
 alias lt='eza --tree --level=2 --long --icons --git'
 alias lta='lt -a'
 alias ff="fzf --preview 'bat --style=numbers --color=always {}'"
+alias c='clear'
+alias cls='clear'
 alias cd="zd"
+
+
+alias cd='zd'
+
+
+# Directories
+alias ..='cd ..'
+alias ...='cd ../..'
+alias ....='cd ../../..'
+
+# === Tools ===
+alias g='git'
+alias d='docker'
+alias r='rails'
+n() { if [ "$#" -eq 0 ]; then nvim .; else nvim "$@"; fi; }
+
+# === Git Shortcuts ===
+alias gs='git status'
+alias ga='git add .'
+alias gc='git commit -m'
+alias gcm='git commit -m'
+alias gcam='git commit -a -m'
+alias gcad='git commit -a --amend'
+alias gp='git push'
+alias gpo='git push origin'
+alias gpl='git pull'
+alias gitc='git clone'
+
+# === Package (yay) ===
+alias yayf="yay -Slq | fzf --multi --preview 'yay -Sii {1}' --preview-window=down:75% | xargs -ro yay -S"
+alias yay='yay --noconfirm --answerclean=All --answerdiff=No'
+
+# === Extra Aliases ===
+alias mkd='mkdir -p'
+alias please='sudo'
+alias grep='grep --color=auto'
+alias ping='ping -c 5'
+alias path='echo -e ${PATH//:/\\n}'
+
+# === Alias de borrado ===
+alias rm='rm -rf'
+alias srm='sudo rm -rf'
+
+# === Docker Aliases & Funciones ===
+alias dim='docker images'
+alias dps='docker ps'
+alias dpsa='docker ps -a'
+alias di='docker inspect'
+alias dip='dip-fn'
+alias dl='dl-fn'
+alias dex='dex-fn'
+alias drun='drun-fn'
+alias drmc='drmc-fn'
+alias drmid='drmid-fn'
+alias dc='dc-fn'
+alias dcu='docker compose up -d'
+alias dcd='docker compose down'
+alias dsr='dsr-fn'
+alias dsp='docker system prune --all'
+alias init='~/.docker/init.sh'
+alias upgrade='yay -Syu'
+
+# Docker
+alias dpsa='docker ps -a'
+alias dcud='docker compose up -d'
+alias dcudf='docker compose up -d --force-recreate'
+alias dcd='docker compose down'
+
+# Navegación rápida
+alias home='cd ~'
+alias docs='cd ~/Documents'
+alias dl='cd ~/Downloads'
+alias wrs='~/.scripts/restart_waydroid_sesion.sh'
+alias sb='source ~/.bashrc'
+alias snano='sudo nano'
+
+## Funciones 
+
+dnames-fn() {
+  docker ps --format "{{.Names}}"
+}
+dip-fn() {
+  echo "IPs de contenedores activos"
+  docker ps --format "{{.Names}}" |
+    while read name; do
+      ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$name")
+      echo -e "$name\t$ip"
+    done | column -t
+}
+dl-fn() {
+  docker logs -f "${1:-$(dps -q | head -n1)}"
+}
+dex-fn() {
+  docker exec -it "$1" ${2:-bash}
+}
+drun-fn() {
+  docker run -it "$1" ${2:-bash}
+}
+drmc-fn() {
+  docker rm $(docker ps --all -q -f status=exited)
+}
+drmid-fn() {
+  imgs=$(docker images -q -f dangling=true)
+  [ -n "$imgs" ] && docker rmi -f $imgs || echo "No dangling images."
+}
+dc-fn() {
+  docker compose "$@"
+}
 zd() {
   if [ $# -eq 0 ]; then
     builtin cd ~ && return
@@ -14,22 +125,7 @@ zd() {
     z "$@" && printf "\U000F17A9 " && pwd || echo "Error: Directory not found"
   fi
 }
+
 open() {
   xdg-open "$@" >/dev/null 2>&1 &
 }
-
-# Directories
-alias ..='cd ..'
-alias ...='cd ../..'
-alias ....='cd ../../..'
-
-# Tools
-alias g='git'
-alias d='docker'
-alias r='rails'
-n() { if [ "$#" -eq 0 ]; then nvim .; else nvim "$@"; fi; }
-
-# Git
-alias gcm='git commit -m'
-alias gcam='git commit -a -m'
-alias gcad='git commit -a --amend'
