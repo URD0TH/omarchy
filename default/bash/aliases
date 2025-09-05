@@ -19,15 +19,17 @@ alias ...='cd ../..'
 alias ....='cd ../../..'
 
 # === Tools ===
-alias g='git'
 alias d='docker'
 alias r='rails'
 n() { if [ "$#" -eq 0 ]; then nvim .; else nvim "$@"; fi; }
 
+
 # === Git Shortcuts ===
+alias g='git'
 alias gs='git status'
 alias ga='git add .'
 alias gc='git commit -m'
+
 alias gcm='git commit -m'
 alias gcam='git commit -a -m'
 alias gcad='git commit -a --amend'
