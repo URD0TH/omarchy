@@ -3,49 +3,53 @@ set -euo pipefail
 
 ###
 # pr-import: importar un PR del repo original (upstream) hacia tu fork
-# Usa GitHub CLI + git. Soporta modos: interactivo, no interactivo y dry-run.
+# Usa GitHub CLI + git. Soporta modos: interactivo, no interactivo, dry-run.
+# Luego limpia ramas locales del upstream y opcionalmente borra la rama pr-<num>.
 ###
 
-# Mostrar ayuda / uso
+# Función para mostrar el mensaje de ayuda / uso
 function show_help() {
   cat <<EOF
 Uso: pr-import [opciones]
 
 Este script ayuda a importar Pull Requests (PR) de un repo original (upstream)
-a tu fork, creando una rama local temporal y luego un PR en el fork.
+a tu fork, creando una rama local temporal y luego un PR en el fork. Luego limpia ramas locales del upstream.
 
 Opciones:
-  -h, --help                Muestra este mensaje de ayuda y sale.
-  -u, --upstream UPSTREAM   Repositorio original (upstream) en formato owner/repo.
-  -f, --fork FORK           Tu fork en formato owner/repo.
-  -d, --dir LOCAL_DIR       Directorio local donde clonar el fork. (por defecto, el directorio actual)
-  -p, --pr PR_NUM           Número del PR en el repositorio original.
-  -b, --branch TARGET       Rama destino en tu fork para aplicar el PR.
-  -n, --non-interactive     Modo no interactivo (no pedir input).
-  -r, --dry-run             Modo dry-run: simula las acciones sin ejecutarlas.
+  -h, --help                    Muestra este mensaje de ayuda y sale.
+  -u, --upstream UPSTREAM       Repositorio original (upstream) en formato owner/repo.
+  -k, --fork FORK               Tu fork en formato owner/repo.
+  -d, --dir LOCAL_DIR           Directorio local donde clonar el fork. (por defecto, el directorio actual)
+  -p, --pr PR_NUM               Número del PR en el repositorio original.
+  -b, --branch TARGET           Rama destino en tu fork para aplicar el PR.
+  -n, --non-interactive         Modo no interactivo (no pedir input).
+  -r, --dry-run                 Modo dry-run: simula las acciones sin ejecutarlas.
+  --f-pr                        Elimina forzadamente la rama local pr-<PR_NUM> después de crear el PR.
 
 Ejemplos:
-  pr-import -u "owner/repo" -f "miusuario/repo" -d "." -p 123 -b "main"
-  pr-import -n -r -u "owner/repo" -f "miusuario/repo" -d "." -p 123 -b "main"  # no interactivo + simulación
+  pr-import -u "owner/repo" -k "miusuario/repo" -d "." -p 123 -b "main"
+  pr-import -n -r -u "owner/repo" -k "miusuario/repo" -d "." -p 123 -b "main"
+  pr-import -n -u "owner/repo" -k "miusuario/repo" -d "." -p 123 -b "main" --f-pr
 EOF
 }
 
-# Primero, si se pide ayuda
+# Si el primer argumento es ayuda, mostrar y salir
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   show_help
   exit 0
 fi
 
-# Directorio base (donde ejecutas el script)
+# Variables base y de configuración
 BASE_DIR="$(pwd)"
-CONF_FILE="${BASE_DIR}/pr_import.conf"
-LOG_FILE="${BASE_DIR}/pr_import.log"
+CONF_FILE="${BASE_DIR}/.pr_import.conf"
+LOG_FILE="${BASE_DIR}/.pr_import.log"
 
-# Flags
+# Flags que modifican comportamiento
 NON_INTERACTIVE=false
 DRY_RUN=false
+FORCE_DELETE_PR_BRANCH=false
 
-# Función de log
+# Función de logging
 function log() {
   local ts
   ts=$(date +"%Y-%m-%d %H:%M:%S")
@@ -61,7 +65,7 @@ function load_config() {
   fi
 }
 
-# Guardar configuración
+# Guardar configuración actual (upstream, fork, local_dir)
 function save_config() {
   cat > "$CONF_FILE" <<EOF
 # Configuración generada por pr-import
@@ -73,7 +77,7 @@ EOF
   log "Configuración guardada en $CONF_FILE"
 }
 
-# Asegurar que .gitignore existe y contiene conf + log
+# Asegurar que .gitignore exista y contenga las entradas de config y log
 function ensure_gitignore_entries() {
   local gi_file="${BASE_DIR}/.gitignore"
   local conf_name="pr_import.conf"
@@ -95,17 +99,17 @@ function ensure_gitignore_entries() {
   fi
 }
 
-# Uso breve (fallback)
+# Uso breve de fallback
 function usage() {
-  echo "Uso: $0 [-u UPSTREAM_REPO] [-f FORK_REPO] [-d LOCAL_DIR] [-p PR_NUM] [-b TARGET_BRANCH] [-n] [-r]"
+  echo "Uso: $0 [-u UPSTREAM_REPO] [-k FORK_REPO] [-d LOCAL_DIR] [-p PR_NUM] [-b TARGET_BRANCH] [-n] [-r] [--f-pr]"
   exit 1
 }
 
-# Procesar opciones / flags
-while getopts "u:f:d:p:b:n:r" opt; do
+# Procesar opciones de línea de comandos (flags de una letra)
+while getopts "u:k:d:p:b:n:r" opt; do
   case $opt in
     u) UPSTREAM_REPO=$OPTARG ;;
-    f) FORK_REPO=$OPTARG ;;
+    k) FORK_REPO=$OPTARG ;;
     d) LOCAL_DIR=$OPTARG ;;
     p) PR_NUM=$OPTARG ;;
     b) TARGET_BRANCH=$OPTARG ;;
@@ -115,12 +119,19 @@ while getopts "u:f:d:p:b:n:r" opt; do
   esac
 done
 
-# Si modo no interactivo, primero cargar config
+# Procesar argumento largo --f-pr (no manejado por getopts)
+for arg in "$@"; do
+  if [[ "$arg" == "--f-pr" ]]; then
+    FORCE_DELETE_PR_BRANCH=true
+  fi
+done
+
+# Si modo no interactivo, cargar config antes de pedir datos
 if [ "$NON_INTERACTIVE" = true ]; then
   load_config
 fi
 
-# Pedir valores si faltan (modo interactivo)
+# Pedir valores si no están presentes (modo interactivo)
 if [ -z "${UPSTREAM_REPO:-}" ]; then
   read -rp "Ingresa repo original (upstream) owner/repo: " UPSTREAM_REPO
 fi
@@ -128,7 +139,6 @@ if [ -z "${FORK_REPO:-}" ]; then
   read -rp "Ingresa tu fork owner/repo: " FORK_REPO
 fi
 if [ -z "${LOCAL_DIR:-}" ]; then
-  # Pregunta con sugerencia: "." significa el directorio actual
   read -rp "Ingresa directorio local donde clonar el fork (por defecto \".\"): " LOCAL_DIR
   if [ -z "$LOCAL_DIR" ]; then
     LOCAL_DIR="."
@@ -138,18 +148,15 @@ if [ -z "${PR_NUM:-}" ]; then
   read -rp "Ingresa número del PR en upstream: " PR_NUM
 fi
 
-# Antes de pedir TARGET_BRANCH, necesitamos mostrar las ramas del fork
-# Pero para eso primero debemos clonar / fetch para tener datos
-
-# Si modo no interactivo, guardar config ahora (para tener repos + local dir)
+# Guardar configuración si estamos en modo no interactivo
 if [ "$NON_INTERACTIVE" = true ]; then
   save_config
 fi
 
-# Asegurar .gitignore
+# Asegurar que el .gitignore contenga las entradas necesarias
 ensure_gitignore_entries
 
-# Función que ejecuta o simula un comando (depende de DRY_RUN)
+# Función que ejecuta o simula un comando
 function do_cmd() {
   local cmd="$*"
   if [ "$DRY_RUN" = true ]; then
@@ -160,7 +167,7 @@ function do_cmd() {
   fi
 }
 
-# Clonar fork si no existe
+# Clonar el fork si no está ya clonado
 if [ ! -d "${LOCAL_DIR}/.git" ]; then
   echo "Clonando fork $FORK_REPO en '$LOCAL_DIR'..."
   do_cmd gh repo clone "$FORK_REPO" "$LOCAL_DIR"
@@ -169,31 +176,31 @@ fi
 # Entrar al directorio del fork
 pushd "$LOCAL_DIR" >/dev/null
 
-# Asegurar remoto upstream
+# Asegurar que el remoto upstream esté configurado
 if ! git remote get-url upstream &>/dev/null; then
   echo "Agregando remoto upstream ${UPSTREAM_REPO}..."
   do_cmd git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
 fi
 
-# Fetch de origin y upstream
+# Traer actualizaciones
 do_cmd git fetch origin
 do_cmd git fetch upstream
 
-# Ahora sí listar ramas del fork (origin)
+# Listar ramas remotas de origin (tu fork)
 mapfile -t branches < <(git branch -r | grep "^origin/" | sed 's|origin/||' | sort | uniq)
 if [ "${#branches[@]}" -eq 0 ]; then
-  echo "Error: no encontré ramas en el fork (origin)" >&2
+  echo "Error: no encontré ramas en el fork (origin)." >&2
   popd >/dev/null
   exit 1
 fi
 
+# Si no nos dieron TARGET_BRANCH (rama destino), pedirla
 if [ -z "${TARGET_BRANCH:-}" ]; then
-  # Mostrar listado de ramas al usuario
   echo "Ramas disponibles en el fork (origin):"
   local i=1
   for br in "${branches[@]}"; do
     echo "  $i) $br"
-    (( i++ ))
+    ((i++))
   done
   read -rp "Selecciona con número la rama destino en tu fork: " sel
   if ! [[ "$sel" =~ ^[0-9]+$ ]]; then
@@ -203,31 +210,32 @@ if [ -z "${TARGET_BRANCH:-}" ]; then
   fi
   if [ "$sel" -lt 1 ] || [ "$sel" -gt "${#branches[@]}" ]; then
     echo "Selección fuera de rango: $sel" >&2
-    popd >/dom/null
+    popd >/dev/null
     exit 1
   fi
   TARGET_BRANCH="${branches[$((sel-1))]}"
 fi
 
-# Traer la rama del PR desde upstream
+# Traer el PR del upstream a una rama local pr-<num>
 pr_branch="pr-${PR_NUM}"
-# Si ya existe local la rama pr-<num>, eliminarla para evitar conflictos
+
+# Si ya existe local la rama pr-<num>, eliminarla antes para evitar conflictos
 if git show-ref --verify --quiet "refs/heads/${pr_branch}"; then
   do_cmd git branch -D "${pr_branch}"
 fi
 
-echo "Traendo PR #${PR_NUM} desde upstream..."
+echo "Trayendo PR #${PR_NUM} desde upstream..."
 do_cmd git fetch upstream "pull/${PR_NUM}/head:${pr_branch}"
 
-# Cambiar a esa rama local
+# Cambiar a esa rama
 do_cmd git checkout "${pr_branch}"
 do_cmd git pull --ff-only || true
 
-# Push de la rama al fork
+# Push de esa rama al fork (origin)
 echo "Pushing rama ${pr_branch} al fork..."
 do_cmd git push origin "${pr_branch}"
 
-# Crear el PR en el fork usando gh, con fallback si --fill falla
+# Función para crear PR en el fork, con fallback si --fill falla
 function create_pr_in_fork() {
   local pr_num=$1
   local pr_branch=$2
@@ -244,7 +252,6 @@ function create_pr_in_fork() {
     :
   else
     echo "Advertencia: gh pr create con --fill falló; intentando fallback..."
-    # Fallback: usar título / cuerpo explícitos
     local fallback_title="Import PR #${pr_num} from upstream"
     local fallback_body="Importado automáticamente del PR #${pr_num} del repositorio upstream."
     PR_URL=$(gh pr create \
@@ -263,7 +270,7 @@ function create_pr_in_fork() {
   echo "$PR_URL"
 }
 
-# Llamar a la función para crear PR (o simular)
+# Crear (o simular) el PR
 if [ "$DRY_RUN" = true ]; then
   echo "[DRY-RUN] gh pr create --base ${TARGET_BRANCH} --head ${FORK_REPO%%/*}:${pr_branch} --fill --repo ${FORK_REPO}"
   PR_URL="(simulado)"
@@ -271,7 +278,23 @@ else
   PR_URL=$(create_pr_in_fork "${PR_NUM}" "${pr_branch}" "${TARGET_BRANCH}")
 fi
 
-popd >/dev/null
-
 echo "✅ PR (o simulación) completado: ${PR_URL}"
 log "PR resultado: ${PR_URL}"
+
+# Limpiar ramas locales del upstream (referencias remotas)
+echo "Eliminando ramas locales del upstream..."
+mapfile -t up_branches < <(git branch -r | grep "^upstream/" | sed 's|upstream/||' | sort | uniq)
+for b in "${up_branches[@]}"; do
+  echo "  -> eliminando rama remota upstream/${b} localmente"
+  do_cmd git branch -r -d "upstream/${b}" || true
+done
+
+# Si se pidió forzar eliminación de la rama pr-<num>, hacerlo
+if [ "$FORCE_DELETE_PR_BRANCH" = true ]; then
+  echo "Eliminando localmente la rama ${pr_branch}..."
+  do_cmd git branch -D "${pr_branch}" || true
+fi
+
+popd >/dev/null
+
+exit 0
