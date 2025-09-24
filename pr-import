@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+###
+# pr-import: importar PR de repositorio upstream hacia tu fork
+# Usa GitHub CLI (gh) + git. Soporta modos: interactivo, no interactivo y dry-run.
+###
+
+# Mostrar ayuda / uso
+function show_help() {
+  cat <<EOF
+Uso: pr-import [opciones]
+
+Este script ayuda a importar Pull Requests (PR) de un repo original (upstream)
+a tu fork, creando una rama local temporal y luego un PR en el fork.
+
+Opciones:
+  -h, --help                Muestra este mensaje de ayuda y sale.
+  -u, --upstream UPSTREAM   Repositorio original (upstream) en formato owner/repo.
+  -f, --fork FORK           Tu fork en formato owner/repo.
+  -d, --dir LOCAL_DIR       Directorio local donde clonar el fork.
+  -p, --pr PR_NUM           Número del PR en el repositorio original.
+  -b, --branch TARGET       Rama destino en tu fork para aplicar el PR.
+  -n, --non-interactive     Modo no interactivo (no pedir input).
+  -r, --dry-run             Modo dry-run: simula las acciones sin ejecutarlas.
+
+Ejemplo de uso:
+  pr-import -u "owner/repo" -f "miusuario/repo" -d "mi_fork" -p 123 -b "main"
+  pr-import -n -r -u "owner/repo" -f "miusuario/repo" -d "mi_fork" -p 123 -b "main"  # sin interacción y solo simulando
+
+EOF
+}
+
+# Detectar si se piden ayuda
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  show_help
+  exit 0
+fi
+
+# Directorio base (donde se ejecuta)
+BASE_DIR="$(pwd)"
+CONF_FILE="${BASE_DIR}/.pr_import.conf"
+LOG_FILE="${BASE_DIR}/.pr_import.log"
+
+# Bandera dry-run
+DRY_RUN=false
+
+# Función de log
+function log() {
+  local ts
+  ts=$(date +"%Y-%m-%d %H:%M:%S")
+  echo "[$ts] $*" >> "$LOG_FILE"
+}
+
+# Cargar configuración si existe
+function load_config() {
+  if [ -f "$CONF_FILE" ]; then
+    # shellcheck disable=SC1090
+    source "$CONF_FILE"
+    log "Configuración cargada desde $CONF_FILE"
+  fi
+}
+
+# Guardar configuración
+function save_config() {
+  cat > "$CONF_FILE" <<EOF
+# Configuración generada por pr-import
+UPSTREAM_REPO="${UPSTREAM_REPO:-}"
+FORK_REPO="${FORK_REPO:-}"
+LOCAL_DIR="${LOCAL_DIR:-}"
+EOF
+  chmod 600 "$CONF_FILE"
+  log "Configuración guardada en $CONF_FILE"
+}
+
+# Asegurar .gitignore contenga conf + log
+function ensure_gitignore_entries() {
+  local gi_file="${BASE_DIR}/.gitignore"
+  local conf_name="pr_import.conf"
+  local log_name="pr_import.log"
+
+  if [ ! -f "$gi_file" ]; then
+    touch "$gi_file"
+    log "Creado ${gi_file}"
+  fi
+
+  if ! grep -Fxq "$conf_name" "$gi_file"; then
+    echo "$conf_name" >> "$gi_file"
+    log "Agregado $conf_name a .gitignore"
+  fi
+
+  if ! grep -Fxq "$log_name" "$gi_file"; then
+    echo "$log_name" >> "$gi_file"
+    log "Agregado $log_name a .gitignore"
+  fi
+}
+
+# Uso breve
+function usage() {
+  echo "Uso: $0 [-u UPSTREAM_REPO] [-f FORK_REPO] [-d LOCAL_DIR] [-p PR_NUM] [-b TARGET_BRANCH] [-n] [-r]"
+  exit 1
+}
+
+# Procesar flags
+NON_INTERACTIVE=false
+while getopts "u:f:d:p:b:n:r" opt; do
+  case $opt in
+    u) UPSTREAM_REPO=$OPTARG ;;
+    f) FORK_REPO=$OPTARG ;;
+    d) LOCAL_DIR=$OPTARG ;;
+    p) PR_NUM=$OPTARG ;;
+    b) TARGET_BRANCH=$OPTARG ;;
+    n) NON_INTERACTIVE=true ;;
+    r) DRY_RUN=true ;;
+    *) usage ;;
+  esac
+done
+
+# Si modo no interactivo, cargar config
+if [ "$NON_INTERACTIVE" = true ]; then
+  load_config
+fi
+
+# Pedir valores si faltan
+if [ -z "${UPSTREAM_REPO:-}" ]; then
+  read -rp "Ingresa repo original (upstream) owner/repo: " UPSTREAM_REPO
+fi
+if [ -z "${FORK_REPO:-}" ]; then
+  read -rp "Ingresa tu fork owner/repo: " FORK_REPO
+fi
+if [ -z "${LOCAL_DIR:-}" ]; then
+  read -rp "Ingresa directorio local donde clonar fork: " LOCAL_DIR
+fi
+if [ -z "${PR_NUM:-}" ]; then
+  read -rp "Ingresa número del PR en upstream: " PR_NUM
+fi
+if [ -z "${TARGET_BRANCH:-}" ]; then
+  read -rp "Ingresa la rama destino en tu fork: " TARGET_BRANCH
+fi
+
+# Guardar configuración si no interactivo (para reutilizar)
+if [ "$NON_INTERACTIVE" = true ]; then
+  save_config
+fi
+
+# Incluir conf / log en .gitignore
+ensure_gitignore_entries
+
+# Función “ejecutar o simular” un comando
+function do_cmd() {
+  local cmd="$*"
+  if [ "$DRY_RUN" = true ]; then
+    echo "[DRY-RUN] $cmd"
+  else
+    log "Ejecución: $cmd"
+    eval "$cmd"
+  fi
+}
+
+# Clonar fork si no existe
+if [ ! -d "$LOCAL_DIR/.git" ]; then
+  echo "Clonando fork $FORK_REPO en '$LOCAL_DIR'..."
+  do_cmd gh repo clone "$FORK_REPO" "$LOCAL_DIR"
+fi
+
+# Entrar al directorio del fork
+pushd "$LOCAL_DIR" >/dev/null
+
+# Configurar upstream remoto si no existe
+if ! git remote get-url upstream &>/dev/null; then
+  echo "Agregando remoto upstream $UPSTREAM_REPO..."
+  do_cmd git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+fi
+
+# Fetch origin y upstream
+do_cmd git fetch origin
+do_cmd git fetch upstream
+
+pr_branch="pr-${PR_NUM}"
+
+# Si rama local ya existe, borrarla
+if git show-ref --verify --quiet "refs/heads/${pr_branch}"; then
+  echo "Rama ${pr_branch} ya existe, borrando..."
+  do_cmd git branch -D "${pr_branch}"
+fi
+
+# Traer PR del upstream
+echo "Traendo PR #${PR_NUM} de upstream..."
+do_cmd git fetch upstream "pull/${PR_NUM}/head:${pr_branch}"
+
+# Checkout de la rama traída
+do_cmd git checkout "${pr_branch}"
+do_cmd git pull --ff-only || true
+
+# Push al fork
+echo "Pushing rama ${pr_branch} al fork..."
+do_cmd git push origin "${pr_branch}"
+
+# Crear PR usando gh
+echo "Creando PR en el fork..."
+if [ "$DRY_RUN" = true ]; then
+  echo "[DRY-RUN] gh pr create --base ${TARGET_BRANCH} --head ${FORK_REPO}:${pr_branch} --fill --repo ${FORK_REPO}"
+  PR_URL="(simulado)"
+else
+  PR_URL=$(gh pr create --base "${TARGET_BRANCH}" --head "${FORK_REPO}:${pr_branch}" --fill --repo "${FORK_REPO}")
+fi
+
+popd >/dev/null
+
+echo "✅ PR (o simulación) completado: ${PR_URL}"
+log "PR resultado: ${PR_URL}"
