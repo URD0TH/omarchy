@@ -105,6 +105,9 @@ function usage() {
   exit 1
 }
 
+# Cargar configuración
+load_config
+
 # Procesar opciones de línea de comandos (flags de una letra)
 while getopts "u:k:d:p:b:n:r" opt; do
   case $opt in
@@ -126,32 +129,27 @@ for arg in "$@"; do
   fi
 done
 
-# Si modo no interactivo, cargar config antes de pedir datos
-if [ "$NON_INTERACTIVE" = true ]; then
-  load_config
-fi
-
-# Pedir valores si no están presentes (modo interactivo)
-if [ -z "${UPSTREAM_REPO:-}" ]; then
-  read -rp "Ingresa repo original (upstream) owner/repo: " UPSTREAM_REPO
-fi
-if [ -z "${FORK_REPO:-}" ]; then
-  read -rp "Ingresa tu fork owner/repo: " FORK_REPO
-fi
-if [ -z "${LOCAL_DIR:-}" ]; then
-  read -rp "Ingresa directorio local donde clonar el fork (por defecto \".\"): " LOCAL_DIR
-  if [ -z "$LOCAL_DIR" ]; then
-    LOCAL_DIR="."
+# Si es modo interactivo, pedir valores si no están presentes
+if [ "$NON_INTERACTIVE" = false ]; then
+  if [ -z "${UPSTREAM_REPO:-}" ]; then
+    read -rp "Ingresa repo original (upstream) owner/repo: " UPSTREAM_REPO
+  fi
+  if [ -z "${FORK_REPO:-}" ]; then
+    read -rp "Ingresa tu fork owner/repo: " FORK_REPO
+  fi
+  if [ -z "${LOCAL_DIR:-}" ]; then
+    read -rp "Ingresa directorio local donde clonar el fork (por defecto \".\"): " LOCAL_DIR
+    if [ -z "$LOCAL_DIR" ]; then
+      LOCAL_DIR="."
+    fi
+  fi
+  if [ -z "${PR_NUM:-}" ]; then
+    read -rp "Ingresa número del PR en upstream: " PR_NUM
   fi
 fi
-if [ -z "${PR_NUM:-}" ]; then
-  read -rp "Ingresa número del PR en upstream: " PR_NUM
-fi
 
-# Guardar configuración si estamos en modo no interactivo
-if [ "$NON_INTERACTIVE" = true ]; then
-  save_config
-fi
+# Guardar configuración
+save_config
 
 # Asegurar que el .gitignore contenga las entradas necesarias
 ensure_gitignore_entries
@@ -190,7 +188,7 @@ mapfile -t branches < <(git branch -r | grep "^origin/" | sed 's|origin/||' | so
 if [ "${#branches[@]}" -eq 0 ]; then
   echo "No encontré ramas en el fork (origin). Intentando 'git fetch origin --prune' y reintentar..."
   do_cmd git fetch origin --prune
-  mapfile -t branches < <(git branch -r | grep "^origin/" | sed 's|origin/||' | sort | uniq)
+  mapfile -t branches < <(git branch -r | grep "origin/" | sed 's|origin/||' | sort | uniq)
   if [ "${#branches[@]}" -eq 0 ]; then
     echo "Error: no encontré ramas en el fork (origin) después de refetch." >&2
     popd >/dev/null
@@ -201,7 +199,7 @@ fi
 # Si no nos dieron TARGET_BRANCH (rama destino), pedirla
 if [ -z "${TARGET_BRANCH:-}" ]; then
   echo "Ramas disponibles en el fork (origin):"
-  local i=1
+  i=1
   for br in "${branches[@]}"; do
     echo "  $i) $br"
     ((i++))
