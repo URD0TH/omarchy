@@ -269,9 +269,10 @@ function create_pr_in_fork() {
     author_login=$(echo "${pr_details}" | jq -r .author.login)
     local author_url="https://github.com/${author_login}"
 
-    local new_info="\n\nPR viene de repo [${UPSTREAM_REPO}](https://github.com/${UPSTREAM_REPO}) numero #[${pr_num}](${pr_url}) creado por [@${author_login}](${author_url}).\n\n"
-    
-    pr_body="${new_info} \n\n ${original_body}"
+    local new_header
+    new_header=$(printf 'PR viene de repo [%s](https://github.com/%s) numero #[%s](%s) creado por [@%s](%s).' "${UPSTREAM_REPO}" "${UPSTREAM_REPO}" "${pr_num}" "${pr_url}" "${author_login}" "${author_url}")
+
+    pr_body=$(printf '\n\n%s\n\n%s' "${new_header}" "${original_body}")
   fi
 
   echo "Creando PR en el fork..."
