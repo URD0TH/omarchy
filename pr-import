@@ -1,0 +1,346 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+###
+# pr-import: importar un PR del repo original (upstream) hacia tu fork
+# Usa GitHub CLI + git. Soporta modos: interactivo, no interactivo, dry-run.
+# Luego limpia ramas locales del upstream y opcionalmente borra la rama pr-<num>.
+###
+
+# Función para mostrar el mensaje de ayuda / uso
+function show_help() {
+  cat <<EOF
+Uso: pr-import [opciones]
+
+Este script ayuda a importar Pull Requests (PR) de un repo original (upstream)
+a tu fork, creando una rama local temporal y luego un PR en el fork. Luego limpia ramas locales del upstream.
+
+Opciones:
+  -h, --help                    Muestra este mensaje de ayuda y sale.
+  -u, --upstream UPSTREAM       Repositorio original (upstream) en formato owner/repo.
+  -k, --fork FORK               Tu fork en formato owner/repo.
+  -d, --dir LOCAL_DIR           Directorio local donde clonar el fork. (por defecto, el directorio actual)
+  -p, --pr PR_NUM               Número del PR en el repositorio original.
+  -b, --branch TARGET           Rama destino en tu fork para aplicar el PR.
+  -n, --non-interactive         Modo no interactivo (no pedir input).
+  -r, --dry-run                 Modo dry-run: simula las acciones sin ejecutarlas.
+  --f-pr                        Elimina forzadamente la rama local pr-<PR_NUM> después de crear el PR.
+
+Ejemplos:
+  pr-import -u "owner/repo" -k "miusuario/repo" -d "." -p 123 -b "main"
+  pr-import -n -r -u "owner/repo" -k "miusuario/repo" -d "." -p 123 -b "main"
+  pr-import -n -u "owner/repo" -k "miusuario/repo" -d "." -p 123 -b "main" --f-pr
+EOF
+}
+
+# Si el primer argumento es ayuda, mostrar y salir
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  show_help
+  exit 0
+fi
+
+# Variables base y de configuración
+BASE_DIR="$(pwd)"
+CONF_FILE="${BASE_DIR}/pr_import.conf"
+LOG_FILE="${BASE_DIR}/pr_import.log"
+
+# Flags que modifican comportamiento
+NON_INTERACTIVE=false
+DRY_RUN=false
+FORCE_DELETE_PR_BRANCH=false
+
+# Función de logging
+function log() {
+  local ts
+  ts=$(date +"%Y-%m-%d %H:%M:%S")
+  echo "[$ts] $*" >> "$LOG_FILE"
+}
+
+# Cargar configuración si existe
+function load_config() {
+  if [ -f "$CONF_FILE" ]; then
+    # shellcheck disable=SC1090
+    source "$CONF_FILE"
+    log "Configuración cargada desde $CONF_FILE"
+  fi
+}
+
+# Guardar configuración actual (upstream, fork, local_dir)
+function save_config() {
+  cat > "$CONF_FILE" <<EOF
+# Configuración generada por pr-import
+UPSTREAM_REPO="${UPSTREAM_REPO:-}"
+FORK_REPO="${FORK_REPO:-}"
+LOCAL_DIR="${LOCAL_DIR:-}"
+EOF
+  chmod 600 "$CONF_FILE"
+  log "Configuración guardada en $CONF_FILE"
+}
+
+# Asegurar que .gitignore exista y contenga las entradas de config y log
+function ensure_gitignore_entries() {
+  local gi_file="${BASE_DIR}/.gitignore"
+  local conf_name="pr_import.conf"
+  local log_name="pr_import.log"
+
+  if [ ! -f "$gi_file" ]; then
+    touch "$gi_file"
+    log "Creado .gitignore en ${gi_file}"
+  fi
+
+  if ! grep -Fxq "$conf_name" "$gi_file"; then
+    echo "$conf_name" >> "$gi_file"
+    log "Agregado $conf_name a .gitignore"
+  fi
+
+  if ! grep -Fxq "$log_name" "$gi_file"; then
+    echo "$log_name" >> "$gi_file"
+    log "Agregado $log_name a .gitignore"
+  fi
+}
+
+# Uso breve de fallback
+function usage() {
+  echo "Uso: $0 [-u UPSTREAM_REPO] [-k FORK_REPO] [-d LOCAL_DIR] [-p PR_NUM] [-b TARGET_BRANCH] [-n] [-r] [--f-pr]"
+  exit 1
+}
+
+# Cargar configuración
+load_config
+
+# Procesar opciones de línea de comandos (flags de una letra)
+while getopts "u:k:d:p:b:n:r" opt; do
+  case $opt in
+    u) UPSTREAM_REPO=$OPTARG ;;
+    k) FORK_REPO=$OPTARG ;;
+    d) LOCAL_DIR=$OPTARG ;;
+    p) PR_NUM=$OPTARG ;;
+    b) TARGET_BRANCH=$OPTARG ;;
+    n) NON_INTERACTIVE=true ;;
+    r) DRY_RUN=true ;;
+    *) usage ;;
+  esac
+done
+
+# Procesar argumento largo --f-pr (no manejado por getopts)
+for arg in "$@"; do
+  if [[ "$arg" == "--f-pr" ]]; then
+    FORCE_DELETE_PR_BRANCH=true
+  fi
+done
+
+# Si es modo interactivo, pedir valores si no están presentes
+if [ "$NON_INTERACTIVE" = false ]; then
+  if [ -z "${UPSTREAM_REPO:-}" ]; then
+    read -rp "Ingresa repo original (upstream) owner/repo: " UPSTREAM_REPO
+  fi
+  if [ -z "${FORK_REPO:-}" ]; then
+    read -rp "Ingresa tu fork owner/repo: " FORK_REPO
+  fi
+  if [ -z "${LOCAL_DIR:-}" ]; then
+    read -rp "Ingresa directorio local donde clonar el fork (por defecto \".\"): " LOCAL_DIR
+    if [ -z "$LOCAL_DIR" ]; then
+      LOCAL_DIR="."
+    fi
+  fi
+  if [ -z "${PR_NUM:-}" ]; then
+    read -rp "Ingresa número del PR en upstream: " PR_NUM
+  fi
+fi
+
+# Guardar configuración
+save_config
+
+# Asegurar que el .gitignore contenga las entradas necesarias
+ensure_gitignore_entries
+
+# Función que ejecuta o simula un comando
+function do_cmd() {
+  local cmd="$*"
+  if [ "$DRY_RUN" = true ]; then
+    echo "[DRY-RUN] $cmd"
+  else
+    log "Ejecución: $cmd"
+    eval "$cmd"
+  fi
+}
+# Clonar el fork si no está ya clonado
+if [ ! -d "${LOCAL_DIR}/.git" ]; then
+  echo "Clonando fork $FORK_REPO en '$LOCAL_DIR'..."
+  do_cmd gh repo clone "$FORK_REPO" "$LOCAL_DIR"
+fi
+
+# Entrar al directorio del fork
+pushd "$LOCAL_DIR" >/dev/null
+
+# Asegurar que el remoto upstream esté configurado
+if ! git remote get-url upstream &>/dev/null; then
+  echo "Agregando remoto upstream ${UPSTREAM_REPO}..."
+  do_cmd git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+fi
+
+# Traer actualizaciones
+do_cmd git fetch origin
+do_cmd git fetch upstream
+
+# Listar ramas remotas de origin (tu fork)
+mapfile -t branches < <(git branch -r | grep "^origin/" | sed 's|origin/||' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | sort | uniq)
+if [ "${#branches[@]}" -eq 0 ]; then
+  echo "No encontré ramas en el fork (origin). Intentando 'git fetch origin --prune' y reintentar..."
+  do_cmd git fetch origin --prune
+  mapfile -t branches < <(git branch -r | grep "origin/" | sed 's|origin/||' | sort | uniq)
+  if [ "${#branches[@]}" -eq 0 ]; then
+    echo "Error: no encontré ramas en el fork (origin) después de refetch." >&2
+    popd >/dev/null
+    exit 1
+  fi
+fi
+
+# Si no nos dieron TARGET_BRANCH (rama destino), pedirla
+if [ -z "${TARGET_BRANCH:-}" ]; then
+  echo "Ramas disponibles en el fork (origin):"
+  i=1
+  for br in "${branches[@]}"; do
+    echo "  $i) $br"
+    ((i++))
+  done
+  read -rp "Selecciona con número la rama destino en tu fork: " sel
+  if ! [[ "$sel" =~ ^[0-9]+$ ]]; then
+    echo "Selección inválida: $sel" >&2
+    popd >/dev/null
+    exit 1
+  fi
+  if [ "$sel" -lt 1 ] || [ "$sel" -gt "${#branches[@]}" ]; then
+    echo "Selección fuera de rango: $sel" >&2
+    popd >/dev/null
+    exit 1
+  fi
+  TARGET_BRANCH="${branches[$((sel-1))]}"
+fi
+
+# Traer el PR del upstream a una rama local pr-<num>
+pr_branch="pr-${PR_NUM}"
+
+# Si ya existe local la rama pr-<num>, eliminarla antes para evitar conflictos
+if git show-ref --verify --quiet "refs/heads/${pr_branch}"; then
+  do_cmd git branch -D "${pr_branch}"
+fi
+
+echo "Trayendo PR #${PR_NUM} desde upstream..."
+do_cmd git fetch upstream "pull/${PR_NUM}/head:${pr_branch}"
+
+# Push de esa rama al fork (origin)
+echo "Pushing rama ${pr_branch} al fork..."
+do_cmd git push origin "${pr_branch}"
+
+# Función para crear PR en el fork, obteniendo título y cuerpo del PR original
+function create_pr_in_fork() {
+  local pr_num=$1
+  local pr_branch=$2
+  local target_branch=$3
+  local fork_user="${FORK_REPO%%/*}"
+  local PR_URL
+
+  # Compara con la rama remota para asegurar que estamos al día
+  if [ -z "$(git log --oneline "origin/${target_branch}".."${pr_branch}" 2>/dev/null)" ]; then
+    echo "Advertencia: No hay nuevos commits en la rama '${pr_branch}' en comparación con 'origin/${target_branch}'." >&2
+    echo "El PR #${pr_num} ya podría estar fusionado en '${target_branch}'. No se creará un nuevo PR." >&2
+    echo ""
+    return
+  fi
+
+  echo "Obteniendo detalles del PR #${pr_num} desde ${UPSTREAM_REPO}..."
+  local pr_details
+  local pr_title
+  local pr_body
+
+  if ! pr_details=$(gh pr view "${pr_num}" --repo "${UPSTREAM_REPO}" --json title,body,url,author); then
+    echo "Advertencia: No se pudieron obtener los detalles del PR. Se usará un título y cuerpo genérico." >&2
+    log "WARN: gh pr view failed for PR #${pr_num} on repo ${UPSTREAM_REPO}"
+    pr_title="Import PR #${pr_num} from upstream"
+    pr_body="Importado automáticamente del PR #[${pr_num}](https://github.com/${UPSTREAM_REPO}/pull/${pr_num}) del repositorio [${UPSTREAM_REPO}](https://github.com/${UPSTREAM_REPO})."
+  else
+    pr_title=$(echo "${pr_details}" | jq -r .title)
+    local original_body
+    original_body=$(echo "${pr_details}" | jq -r .body)
+    local pr_url
+    pr_url=$(echo "${pr_details}" | jq -r .url)
+    local author_login
+    author_login=$(echo "${pr_details}" | jq -r .author.login)
+    local author_url="https://github.com/${author_login}"
+
+    local new_header
+    new_header=$(printf 'PR viene de repo [%s](https://github.com/%s) numero #[%s](%s) creado por [@%s](%s).' "${UPSTREAM_REPO}" "${UPSTREAM_REPO}" "${pr_num}" "${pr_url}" "${author_login}" "${author_url}")
+
+    pr_body=$(printf '\n\n%s\n\n%s' "${new_header}" "${original_body}")
+  fi
+
+  echo "Creando PR en el fork..."
+  if ! PR_URL=$(gh pr create \
+       --base "${target_branch}" \
+       --head "${fork_user}:${pr_branch}" \
+       --title "${pr_title}" \
+       --body "${pr_body}" \
+       --repo "${FORK_REPO}"); then
+      echo "Error: creación de PR falló" >&2
+      log "ERROR: gh pr create falló"
+      popd >/dev/null
+      exit 1
+  fi
+
+  echo "$PR_URL"
+}
+
+# Crear (o simular) el PR
+if [ "$DRY_RUN" = true ]; then
+  echo "[DRY-RUN] gh pr create --base ${TARGET_BRANCH} --head ${FORK_REPO%%/*}:${pr_branch} --repo ${FORK_REPO} (con título y cuerpo del PR original)"
+  PR_URL="(simulado)"
+else
+  PR_URL=$(create_pr_in_fork "${PR_NUM}" "${pr_branch}" "${TARGET_BRANCH}")
+fi
+
+if [ -n "$PR_URL" ]; then
+  echo "✅ PR (o simulación) completado: ${PR_URL}"
+  log "PR resultado: ${PR_URL}"
+fi
+
+# Limpiar ramas locales del upstream (referencias remotas)
+echo "Eliminando ramas locales del upstream..."
+mapfile -t up_branches < <(git branch -r | grep "^upstream/" | sed 's|upstream/||' | sort | uniq)
+for b in "${up_branches[@]}"; do
+  echo "  -> eliminando rama remota upstream/${b} localmente"
+  do_cmd git branch -r -d "upstream/${b}" || true
+done
+
+# Si se pidió forzar eliminación de la rama pr-<num>, hacerlo
+if [ "$FORCE_DELETE_PR_BRANCH" = true ]; then
+  echo "Eliminando localmente la rama ${pr_branch}..."
+  do_cmd git branch -D "${pr_branch}" || true
+fi
+
+popd >/dev/null
+
+exit 0
+ama ${pr_branch}..."
+  do_cmd git branch -D "${pr_branch}" || true
+fi
+
+popd >/dev/null
+
+exit 0
+n de la rama pr-<num>, hacerlo
+if [ "$FORCE_DELETE_PR_BRANCH" = true ]; then
+  echo "Eliminando localmente la rama ${pr_branch}..."
+  do_cmd git branch -D "${pr_branch}" || true
+fi
+
+popd >/dev/null
+
+exit 0
+ama ${pr_branch}..."
+  do_cmd git branch -D "${pr_branch}" || true
+fi
+
+popd >/dev/null
+
+exit 0

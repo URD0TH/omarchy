@@ -1,6 +1,11 @@
 #!/bin/bash
 
 fzf_args=(
+  --ansi
+  --delimiter=$'\t'
+  --with-nth=2..
+  --no-sort
+  --exact
   --multi
   --preview 'pacman -Sii {1}'
   --preview-label='alt-p: toggle description, alt-j/k: scroll, tab: multi-select, F11: maximize'

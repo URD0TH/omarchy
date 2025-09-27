@@ -7,8 +7,10 @@ HISTFILESIZE="${HISTSIZE}"
 # Autocompletion
 if [[ ! -v BASH_COMPLETION_VERSINFO && -f /usr/share/bash-completion/bash_completion ]]; then
   source /usr/share/bash-completion/bash_completion
+  source /usr/share/bash-completion/bash_completion/completions
 fi
 
-# Set complete path
-export PATH="$HOME/.local/bin:$PATH"
 set +h
+# Set complete path
+export PATH="./bin:$HOME/.local/bin:$HOME/.local/share/omarchy/bin:$PATH"
+

@@ -11,17 +11,24 @@ if command -v zoxide &> /dev/null; then
 fi
 
 if command -v fzf &> /dev/null; then
-  if [[ -f /usr/share/fzf/completion.bash ]]; then
-    source /usr/share/fzf/completion.bash
+  if [[ -f /usr/share/bash-completion/completions/fzf ]]; then
+    source /usr/share/bash-completion/completions/fzf
   fi
   if [[ -f /usr/share/fzf/key-bindings.bash ]]; then
     source /usr/share/fzf/key-bindings.bash
   fi
 fi
 
+
 # Performance tuning: Fix for Arch Linux systemd user session file descriptor limit inheritance bug
 # Arch Linux systemd user sessions don't properly inherit global ulimit settings
 # This shell-level workaround ensures file descriptor limits are set correctly
 if [[ $(ulimit -n) -lt 65536 ]] 2>/dev/null; then
   ulimit -n 65536 2>/dev/null || true
+fi
+
+if [ -f /usr/share/bash-complete-alias/complete_alias ]; then
+  source /usr/share/bash-complete-alias/complete_alias
+  complete -F _complete_alias "${!BASH_ALIASES[@]}"
+
 fi
