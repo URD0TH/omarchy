@@ -89,6 +89,7 @@ power-profiles-daemon
 python-gobject
 python-poetry-core
 python-terminaltexteffects
+python-vosk
 qt5-wayland
 ripgrep
 satty
@@ -100,6 +101,8 @@ sushi
 swaybg
 swayosd
 system-config-printer
+tesseract
+tesseract-data-eng
 tldr
 tree-sitter-cli
 ttf-cascadia-mono-nerd
@@ -128,4 +131,5 @@ xmlstarlet
 xournalpp
 yaru-icon-theme
 yay
+ydotool
 zoxide
