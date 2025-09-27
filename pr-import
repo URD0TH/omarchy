@@ -184,7 +184,7 @@ do_cmd git fetch origin
 do_cmd git fetch upstream
 
 # Listar ramas remotas de origin (tu fork)
-mapfile -t branches < <(git branch -r | grep "^origin/" | sed 's|origin/||' | sort | uniq)
+mapfile -t branches < <(git branch -r | grep "^origin/" | sed 's|origin/||' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | sort | uniq)
 if [ "${#branches[@]}" -eq 0 ]; then
   echo "No encontré ramas en el fork (origin). Intentando 'git fetch origin --prune' y reintentar..."
   do_cmd git fetch origin --prune
@@ -229,15 +229,11 @@ fi
 echo "Trayendo PR #${PR_NUM} desde upstream..."
 do_cmd git fetch upstream "pull/${PR_NUM}/head:${pr_branch}"
 
-# Cambiar a esa rama
-do_cmd git checkout "${pr_branch}"
-do_cmd git pull --ff-only || true
-
 # Push de esa rama al fork (origin)
 echo "Pushing rama ${pr_branch} al fork..."
 do_cmd git push origin "${pr_branch}"
 
-# Función para crear PR en el fork, con fallback si --fill falla
+# Función para crear PR en el fork, obteniendo título y cuerpo del PR original
 function create_pr_in_fork() {
   local pr_num=$1
   local pr_branch=$2
@@ -245,28 +241,50 @@ function create_pr_in_fork() {
   local fork_user="${FORK_REPO%%/*}"
   local PR_URL
 
+  # Compara con la rama remota para asegurar que estamos al día
+  if [ -z "$(git log --oneline "origin/${target_branch}".."${pr_branch}" 2>/dev/null)" ]; then
+    echo "Advertencia: No hay nuevos commits en la rama '${pr_branch}' en comparación con 'origin/${target_branch}'." >&2
+    echo "El PR #${pr_num} ya podría estar fusionado en '${target_branch}'. No se creará un nuevo PR." >&2
+    echo ""
+    return
+  fi
+
+  echo "Obteniendo detalles del PR #${pr_num} desde ${UPSTREAM_REPO}..."
+  local pr_details
+  local pr_title
+  local pr_body
+
+  if ! pr_details=$(gh pr view "${pr_num}" --repo "${UPSTREAM_REPO}" --json title,body,url,author); then
+    echo "Advertencia: No se pudieron obtener los detalles del PR. Se usará un título y cuerpo genérico." >&2
+    log "WARN: gh pr view failed for PR #${pr_num} on repo ${UPSTREAM_REPO}"
+    pr_title="Import PR #${pr_num} from upstream"
+    pr_body="Importado automáticamente del PR #[${pr_num}](https://github.com/${UPSTREAM_REPO}/pull/${pr_num}) del repositorio [${UPSTREAM_REPO}](https://github.com/${UPSTREAM_REPO})."
+  else
+    pr_title=$(echo "${pr_details}" | jq -r .title)
+    local original_body
+    original_body=$(echo "${pr_details}" | jq -r .body)
+    local pr_url
+    pr_url=$(echo "${pr_details}" | jq -r .url)
+    local author_login
+    author_login=$(echo "${pr_details}" | jq -r .author.login)
+    local author_url="https://github.com/${author_login}"
+
+    local new_info="\n\nPR viene de repo [${UPSTREAM_REPO}](https://github.com/${UPSTREAM_REPO}) numero #[${pr_num}](${pr_url}) creado por [@${author_login}](${author_url}).\n\n"
+    
+    pr_body="${new_info} \n\n ${original_body}"
+  fi
+
   echo "Creando PR en el fork..."
-  if PR_URL=$(gh pr create \
+  if ! PR_URL=$(gh pr create \
        --base "${target_branch}" \
        --head "${fork_user}:${pr_branch}" \
-       --fill \
-       --repo "${FORK_REPO}" 2>/dev/null); then
-    :
-  else
-    echo "Advertencia: gh pr create con --fill falló; intentando fallback..."
-    local fallback_title="Import PR #${pr_num} from upstream"
-    local fallback_body="Importado automáticamente del PR #${pr_num} del repositorio upstream."
-    PR_URL=$(gh pr create \
-      --base "${target_branch}" \
-      --head "${fork_user}:${pr_branch}" \
-      --title "${fallback_title}" \
-      --body "${fallback_body}" \
-      --repo "${FORK_REPO}") || {
-      echo "Error: creación de PR falló (fallback también)" >&2
-      log "ERROR: gh pr create fallback falló"
+       --title "${pr_title}" \
+       --body "${pr_body}" \
+       --repo "${FORK_REPO}"); then
+      echo "Error: creación de PR falló" >&2
+      log "ERROR: gh pr create falló"
       popd >/dev/null
       exit 1
-    }
   fi
 
   echo "$PR_URL"
@@ -274,14 +292,16 @@ function create_pr_in_fork() {
 
 # Crear (o simular) el PR
 if [ "$DRY_RUN" = true ]; then
-  echo "[DRY-RUN] gh pr create --base ${TARGET_BRANCH} --head ${FORK_REPO%%/*}:${pr_branch} --fill --repo ${FORK_REPO}"
+  echo "[DRY-RUN] gh pr create --base ${TARGET_BRANCH} --head ${FORK_REPO%%/*}:${pr_branch} --repo ${FORK_REPO} (con título y cuerpo del PR original)"
   PR_URL="(simulado)"
 else
   PR_URL=$(create_pr_in_fork "${PR_NUM}" "${pr_branch}" "${TARGET_BRANCH}")
 fi
 
-echo "✅ PR (o simulación) completado: ${PR_URL}"
-log "PR resultado: ${PR_URL}"
+if [ -n "$PR_URL" ]; then
+  echo "✅ PR (o simulación) completado: ${PR_URL}"
+  log "PR resultado: ${PR_URL}"
+fi
 
 # Limpiar ramas locales del upstream (referencias remotas)
 echo "Eliminando ramas locales del upstream..."
@@ -294,6 +314,29 @@ done
 # Si se pidió forzar eliminación de la rama pr-<num>, hacerlo
 if [ "$FORCE_DELETE_PR_BRANCH" = true ]; then
   echo "Eliminando localmente la rama ${pr_branch}..."
+  do_cmd git branch -D "${pr_branch}" || true
+fi
+
+popd >/dev/null
+
+exit 0
+ama ${pr_branch}..."
+  do_cmd git branch -D "${pr_branch}" || true
+fi
+
+popd >/dev/null
+
+exit 0
+n de la rama pr-<num>, hacerlo
+if [ "$FORCE_DELETE_PR_BRANCH" = true ]; then
+  echo "Eliminando localmente la rama ${pr_branch}..."
+  do_cmd git branch -D "${pr_branch}" || true
+fi
+
+popd >/dev/null
+
+exit 0
+ama ${pr_branch}..."
   do_cmd git branch -D "${pr_branch}" || true
 fi
 
