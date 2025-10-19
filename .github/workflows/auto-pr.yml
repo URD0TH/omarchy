@@ -1,0 +1,64 @@
+name: Auto‑PR from master‑ori → master
+
+on:
+  push:
+    branches:
+      - master‑ori
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  create_pr_with_list:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: List associated pull requests between branches
+        id: list_prs
+        uses: int128/list-associated-pull-requests-action@v1.58.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          base: master
+          head: master‑ori
+
+      - name: Format list into Markdown
+        id: format_list
+        run: |
+          PRS_JSON="${{ steps.list_prs.outputs.json }}"
+          echo "$PRS_JSON" | jq -r '.groups | to_entries[] | .value[] | "- \(.pull.title) #{\(.pull.number)} [#\(.pull.number)](https://github.com/${{ github.repository }}/pull/\(.pull.number)) by [@\(.pull.author)](https://github.com/\(.pull.author))"' > list.md
+          LIST=$(cat list.md)
+          echo "LIST_MD<<EOF" >> $GITHUB_OUTPUT
+          echo "${LIST}" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Decide whether to create PR
+        run: |
+          if [[ -z "${{ steps.format_list.outputs.LIST_MD }}" ]]; then
+            echo "✅ Lista vacía — no se creará Pull Request."
+            exit 0
+          fi
+        # Este paso termina el job si la lista está vacía, y el siguiente paso solo corre si hay lista
+
+      - name: Create Pull Request from master‑ori → master
+        if: ${{ steps.format_list.outputs.LIST_MD != '' }}
+        uses: peter-evans/create-pull-request@v7.0.8
+        id: cpr
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: master‑ori
+          base: master
+          title: "Merge master‑ori into master"
+          body: |
+            **Pull requests incluidos en este merge:**  
+            ${{ steps.format_list.outputs.LIST_MD }}
+          labels: |
+            merge
+          assignees: |
+            URD0TH
+          draft: false
