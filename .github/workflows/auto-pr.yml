@@ -1,9 +1,9 @@
-name: Auto‑PR from master‑ori → master
+name: Auto-PR from master-ori → master
 
 on:
   push:
     branches:
-      - master‑ori
+      - master-ori
   workflow_dispatch:
 
 permissions:
@@ -25,7 +25,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           base: master
-          head: master‑ori
+          head: master-ori
 
       - name: Format list into Markdown
         id: format_list
@@ -45,15 +45,15 @@ jobs:
           fi
         # Este paso termina el job si la lista está vacía, y el siguiente paso solo corre si hay lista
 
-      - name: Create Pull Request from master‑ori → master
+      - name: Create Pull Request from master-ori → master
         if: ${{ steps.format_list.outputs.LIST_MD != '' }}
         uses: peter-evans/create-pull-request@v7.0.8
         id: cpr
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          branch: master‑ori
+          branch: master-ori
           base: master
-          title: "Merge master‑ori into master"
+          title: "Merge master-ori into master"
           body: |
             **Pull requests incluidos en este merge:**  
             ${{ steps.format_list.outputs.LIST_MD }}
