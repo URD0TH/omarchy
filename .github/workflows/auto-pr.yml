@@ -32,20 +32,20 @@ jobs:
         run: |
           PRS_JSON="${{ steps.list_prs.outputs.json }}"
           echo "$PRS_JSON" | jq -r '.groups | to_entries[] | .value[] | "- \(.pull.title) #{\(.pull.number)} [#\(.pull.number)](https://github.com/${{ github.repository }}/pull/\(.pull.number)) by [@\(.pull.author)](https://github.com/\(.pull.author))"' > list.md
-          LIST=$(cat list.md)
-          echo "LIST_MD<<EOF" >> $GITHUB_OUTPUT
-          echo "${LIST}" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          LIST=$(<list.md)
+          echo "LIST_MD<<EOF" >> $GITHUB_ENV
+          echo "$LIST" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
       - name: Decide whether to create PR
         run: |
-          if [[ -z "${{ steps.format_list.outputs.LIST_MD }}" ]]; then
+          if [[ -z "${LIST_MD}" ]]; then
             echo "✅ Lista vacía — no se creará Pull Request."
             exit 0
           fi
 
       - name: Create Pull Request from master-ori → master
-        if: ${{ steps.format_list.outputs.LIST_MD != '' }}
+        if: ${{ env.LIST_MD != '' }}
         uses: peter-evans/create-pull-request@v7.0.8
         id: cpr
         with:
@@ -55,7 +55,7 @@ jobs:
           title: "Merge master-ori into master"
           body: |
             **Pull requests incluidos en este merge:**  
-            ${{ steps.format_list.outputs.LIST_MD }}
+            ${{ env.LIST_MD }}
           labels: |
             merge
           assignees: |
