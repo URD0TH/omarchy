@@ -43,7 +43,6 @@ jobs:
             echo "✅ Lista vacía — no se creará Pull Request."
             exit 0
           fi
-        # Este paso termina el job si la lista está vacía, y el siguiente paso solo corre si hay lista
 
       - name: Create Pull Request from master-ori → master
         if: ${{ steps.format_list.outputs.LIST_MD != '' }}
