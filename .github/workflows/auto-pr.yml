@@ -30,22 +30,27 @@ jobs:
       - name: Format list into Markdown
         id: format_list
         run: |
-          PRS_JSON="${{ steps.list_prs.outputs.json }}"
-          echo "$PRS_JSON" | jq -r '.groups | to_entries[] | .value[] | "- \(.pull.title) #{\(.pull.number)} [#\(.pull.number)](https://github.com/${{ github.repository }}/pull/\(.pull.number)) by [@\(.pull.author)](https://github.com/\(.pull.author))"' > list.md
-          LIST=$(<list.md)
-          echo "LIST_MD<<EOF" >> $GITHUB_ENV
-          echo "$LIST" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+          # Guardar la salida JSON en un archivo de forma segura
+          printf '%s' "${{ steps.list_prs.outputs.json }}" > prs.json
 
-      - name: Decide whether to create PR
-        run: |
-          if [[ -z "${LIST_MD}" ]]; then
-            echo "✅ Lista vacía — no se creará Pull Request."
-            exit 0
+          # Extraer PRs (tanto de groups como de others) y formatear en Markdown
+          jq -r '.groups[]? + .others[]? | select(.pull != null) |
+            "- \(.pull.title) [#\(.pull.number)](https://github.com/${{ github.repository }}/pull/\(.pull.number)) by [@\(.pull.author)](https://github.com/\(.pull.author))"' prs.json > list.md || true
+
+          # Si no hay contenido, marcar has_changes=false, si no, exportar la lista como output
+          if [ -s list.md ]; then
+            LIST=$(cat list.md)
+            echo "list<<EOF" >> $GITHUB_OUTPUT
+            echo "$LIST" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No PRs to include"
           fi
 
       - name: Create Pull Request from master-ori → master
-        if: ${{ env.LIST_MD != '' }}
+        if: steps.format_list.outputs.has_changes == 'true'
         uses: peter-evans/create-pull-request@v7.0.8
         id: cpr
         with:
@@ -54,8 +59,8 @@ jobs:
           base: master
           title: "Merge master-ori into master"
           body: |
-            **Pull requests incluidos en este merge:**  
-            ${{ env.LIST_MD }}
+            **Pull requests incluidos en este merge:**
+            ${{ steps.format_list.outputs.list }}
           labels: |
             merge
           assignees: |
