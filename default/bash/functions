@@ -65,3 +65,41 @@ img2png() {
     -define png:exclude-chunk=all \
     "${1%.*}.png"
 }
+
+# Función para alias update según distro Linux
+function update() {
+  if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    echo "Detectado ID: $ID"
+    case "$ID" in
+      ubuntu|debian)
+        sudo apt update && sudo apt upgrade -y
+        ;;
+      arch)
+        echo "Arch Linux detectado"
+        echo "Elija opción para actualizar Arch Linux:"
+        echo "1) pacman"
+        echo "2) yay"
+        echo "3) ambos (usar solo yay)"
+        read -rp "Opción (1, 2, o 3): " choice
+        case $choice in
+          1) sudo pacman -Syu ;;
+          2) yay -Syu ;;
+          3) yay -Syu ;;
+          *) echo "Opción no válida, usando pacman por defecto"; sudo pacman -Syu ;;
+        esac
+        ;;
+      fedora)
+        sudo dnf upgrade --refresh -y
+        ;;
+      opensuse)
+        sudo zypper refresh && sudo zypper update -y
+        ;;
+      *)
+        echo "Distribución no soportada para comando update automático"
+        ;;
+    esac
+  else
+    echo "No se detectó sistema operativo compatible"
+  fi
+}
