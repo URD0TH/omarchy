@@ -1,0 +1,68 @@
+name: Auto-PR from master-ori → master
+
+on:
+  push:
+    branches:
+      - master-ori
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  create_pr_with_list:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: List associated pull requests between branches
+        id: list_prs
+        uses: int128/list-associated-pull-requests-action@v1.58.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          base: master
+          head: master-ori
+
+      - name: Format list into Markdown
+        id: format_list
+        run: |
+          # Guardar la salida JSON en un archivo de forma segura
+          printf '%s' "${{ steps.list_prs.outputs.json }}" > prs.json
+
+          # Extraer PRs (tanto de groups como de others) y formatear en Markdown
+          jq -r '.groups[]? + .others[]? | select(.pull != null) |
+            "- \(.pull.title) [#\(.pull.number)](https://github.com/${{ github.repository }}/pull/\(.pull.number)) by [@\(.pull.author)](https://github.com/\(.pull.author))"' prs.json > list.md || true
+
+          # Si no hay contenido, marcar has_changes=false, si no, exportar la lista como output
+          if [ -s list.md ]; then
+            LIST=$(cat list.md)
+            echo "list<<EOF" >> $GITHUB_OUTPUT
+            echo "$LIST" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No PRs to include"
+          fi
+
+      - name: Create Pull Request from master-ori → master
+        if: steps.format_list.outputs.has_changes == 'true'
+        uses: peter-evans/create-pull-request@v7.0.8
+        id: cpr
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: master-ori
+          base: master
+          title: "Merge master-ori into master"
+          body: |
+            **Pull requests incluidos en este merge:**
+            ${{ steps.format_list.outputs.list }}
+          labels: |
+            merge
+          assignees: |
+            URD0TH
+          draft: false
