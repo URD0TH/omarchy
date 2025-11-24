@@ -21,7 +21,7 @@ jobs:
 
       - name: List associated pull requests between branches
         id: list_prs
-        uses: int128/list-associated-pull-requests-action@v1.58.0
+        uses: int128/list-associated-pull-requests-action@v1.60.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           base: master
